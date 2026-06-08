@@ -1,0 +1,23 @@
+[data]
+data_root = "data/BCCD_processado"
+
+[training]
+epochs = 50
+batch_size = 8
+num_workers = 0
+seed = 42
+# device = "cuda"
+
+[optimizer]
+lr = 0.001
+momentum = 0.99
+weight_decay = 0.0005
+
+[scheduler]
+step_size = 10
+gamma = 0.5
+
+[output]
+output_dir = "runs/unet"
+checkpoint_every = 5
+final_model_name = "unet_final.pth"

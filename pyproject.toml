@@ -1,0 +1,20 @@
+[project]
+name = "unet-bccd"
+version = "0.1.0"
+description = "Modular U-Net training pipeline for the BCCD dataset."
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "pillow",
+    "scipy",
+    "opencv-python",
+    "tqdm",
+    "matplotlib",
+    "kagglehub",
+    "tomli; python_version < '3.11'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

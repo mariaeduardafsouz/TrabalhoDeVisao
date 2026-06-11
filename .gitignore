@@ -12,3 +12,6 @@ checkpoints/
 *.pt
 
 training_history.png
+
+venv/
+models/

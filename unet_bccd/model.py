@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 
@@ -21,7 +23,12 @@ class DoubleConv(nn.Module):
 
 
 class UNet(nn.Module):
-    """Original U-Net layout with valid convolutions."""
+    """Original U-Net layout with valid convolutions.
+
+    Faithful to Ronneberger et al. (2015):
+    - Gaussian weight init with std = sqrt(2 / fan_in)
+    - Dropout (p=0.5) at the two deepest levels (512-ch and 1024-ch)
+    """
 
     def __init__(self, in_channels: int = 1, out_channels: int = 2) -> None:
         super().__init__()
@@ -37,6 +44,8 @@ class UNet(nn.Module):
 
         self.down4 = DoubleConv(256, 512)
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.dropout = nn.Dropout2d(p=0.5)
 
         self.bottleneck = DoubleConv(512, 1024)
 
@@ -56,13 +65,16 @@ class UNet(nn.Module):
         self._init_weights()
 
     def _init_weights(self) -> None:
+        """Gaussian init with std = sqrt(2 / N) as in the U-Net paper (§2)."""
         for module in self.modules():
             if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(
-                    module.weight,
-                    mode="fan_in",
-                    nonlinearity="relu",
+                fan_in = (
+                    module.weight.shape[1]
+                    * module.weight.shape[2]
+                    * module.weight.shape[3]
                 )
+                std = math.sqrt(2.0 / fan_in)
+                nn.init.normal_(module.weight, mean=0.0, std=std)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
 
@@ -77,9 +89,11 @@ class UNet(nn.Module):
         p3 = self.pool3(x3)
 
         x4 = self.down4(p3)
+        x4 = self.dropout(x4)
         p4 = self.pool4(x4)
 
         bottleneck = self.bottleneck(p4)
+        bottleneck = self.dropout(bottleneck)
 
         up4 = self.upconv4(bottleneck)
         d4 = self.up4(self._crop_and_concat(x4, up4))

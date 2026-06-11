@@ -3,19 +3,23 @@ data_root = "data/BCCD_processado"
 
 [training]
 epochs = 50
-batch_size = 8
+batch_size = 1
 num_workers = 0
 seed = 42
+augment = true
 # device = "cuda"
 
 [optimizer]
-lr = 0.001
+lr = 0.01
 momentum = 0.99
-weight_decay = 0.0005
+# weight_decay and nesterov not used (not mentioned in the original paper)
 
-[scheduler]
-step_size = 10
-gamma = 0.5
+# [scheduler]
+# Disabled by default: the original U-Net paper uses a fixed learning rate.
+# Uncomment and set use_scheduler = true to re-enable StepLR decay.
+# use_scheduler = true
+# step_size = 10
+# gamma = 0.5
 
 [output]
 output_dir = "runs/unet"

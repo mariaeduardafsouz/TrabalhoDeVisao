@@ -57,7 +57,6 @@ def process_dataset(
     sigma: float = 5.0,
     val_ratio: float = 0.2,
     seed: int = 42,
-    use_class_weights: bool = False,
     overwrite: bool = False,
 ) -> ProcessedDatasetPaths:
     """Create fixed-size tiles and train weights from the raw BCCD dataset."""
@@ -101,7 +100,6 @@ def process_dataset(
             tile_size=tile_size,
             w0=w0,
             sigma=sigma,
-            use_class_weights=use_class_weights,
             progress=progress,
         )
         _process_split(
@@ -112,7 +110,6 @@ def process_dataset(
             tile_size=tile_size,
             w0=w0,
             sigma=sigma,
-            use_class_weights=False,
             progress=progress,
         )
         _process_split(
@@ -123,7 +120,6 @@ def process_dataset(
             tile_size=tile_size,
             w0=w0,
             sigma=sigma,
-            use_class_weights=False,
             progress=progress,
         )
 
@@ -248,7 +244,6 @@ def _process_split(
     tile_size: int,
     w0: float,
     sigma: float,
-    use_class_weights: bool,
     progress: tqdm,
 ) -> None:
     for image_path, mask_path in pairs:
@@ -291,10 +286,10 @@ def _process_split(
                 cv2.imwrite(str(output_mask_dir / f"{tile_id}.png"), tile_mask_binary * 255)
 
                 if output_weight_dir is not None:
-                    class_weights = (
-                        compute_binary_class_weights(tile_mask_binary)
-                        if use_class_weights
-                        else None
+                    # Always use class-frequency weights (w_c) as per the
+                    # original U-Net paper (Eq. 2)
+                    class_weights = compute_binary_class_weights(
+                        tile_mask_binary
                     )
                     weights = compute_unet_weight_map(
                         tile_mask_binary,
@@ -346,7 +341,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma", type=float, default=5.0)
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--use-class-weights", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -368,7 +362,6 @@ def main() -> None:
         sigma=args.sigma,
         val_ratio=args.val_ratio,
         seed=args.seed,
-        use_class_weights=args.use_class_weights,
         overwrite=args.overwrite,
     )
 

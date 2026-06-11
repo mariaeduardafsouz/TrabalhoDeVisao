@@ -28,13 +28,15 @@ from .visualization import plot_history
 class TrainConfig:
     data_root: Path = Path("data/BCCD_processado")
     epochs: int = 50
-    batch_size: int = 8
+    batch_size: int = 1
     num_workers: int = 0
-    lr: float = 0.001
+    lr: float = 0.01
     momentum: float = 0.99
-    weight_decay: float = 0.0005
+    weight_decay: float = 0.0
     step_size: int = 10
     gamma: float = 0.5
+    use_scheduler: bool = False
+    augment: bool = True
     checkpoint_every: int = 5
     output_dir: Path = Path("runs/unet")
     final_model_name: str = "unet_final.pth"
@@ -44,9 +46,9 @@ class TrainConfig:
 
 CONFIG_SECTIONS = {
     "data": {"data_root"},
-    "training": {"epochs", "batch_size", "num_workers", "seed", "device"},
+    "training": {"epochs", "batch_size", "num_workers", "seed", "device", "augment"},
     "optimizer": {"lr", "momentum", "weight_decay"},
-    "scheduler": {"step_size", "gamma"},
+    "scheduler": {"step_size", "gamma", "use_scheduler"},
     "output": {"output_dir", "checkpoint_every", "final_model_name"},
 }
 
@@ -56,6 +58,7 @@ def build_dataloaders(config: TrainConfig) -> tuple[DataLoader, DataLoader | Non
         config.data_root / "train" / "original_tiles",
         config.data_root / "train" / "mask_tiles",
         config.data_root / "train" / "pesos",
+        augment=config.augment,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -69,7 +72,11 @@ def build_dataloaders(config: TrainConfig) -> tuple[DataLoader, DataLoader | Non
     val_mask_dir = config.data_root / "val" / "mask_tiles"
     val_loader = None
     if val_image_dir.exists() and any(val_image_dir.iterdir()):
-        val_dataset = SegmentationTilesDataset(val_image_dir, val_mask_dir)
+        val_dataset = SegmentationTilesDataset(
+            val_image_dir,
+            val_mask_dir,
+            augment=False,
+        )
         val_loader = DataLoader(
             val_dataset,
             batch_size=config.batch_size,
@@ -152,13 +159,14 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
         lr=config.lr,
         momentum=config.momentum,
         weight_decay=config.weight_decay,
-        nesterov=True,
     )
-    scheduler = optim.lr_scheduler.StepLR(
-        optimizer,
-        step_size=config.step_size,
-        gamma=config.gamma,
-    )
+    scheduler = None
+    if config.use_scheduler:
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=config.step_size,
+            gamma=config.gamma,
+        )
 
     print(f"Device: {device}")
     print(f"Train samples: {len(train_loader.dataset)}")
@@ -184,8 +192,9 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
             epoch,
             config.epochs,
         )
-        scheduler.step()
-        current_lr = scheduler.get_last_lr()[0]
+        if scheduler is not None:
+            scheduler.step()
+        current_lr = optimizer.param_groups[0]["lr"]
 
         history["train_loss"].append(train_loss)
         history["learning_rates"].append(current_lr)
@@ -308,6 +317,9 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--step-size", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
+    parser.add_argument("--use-scheduler", action="store_true", default=None)
+    parser.add_argument("--augment", action="store_true", default=None)
+    parser.add_argument("--no-augment", dest="augment", action="store_false")
     parser.add_argument("--checkpoint-every", type=int, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--final-model-name", default=None)

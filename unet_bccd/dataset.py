@@ -7,25 +7,41 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
+from .transforms import apply_augmentations
 from .utils import find_file_by_stem, list_image_files
 
 
 class SegmentationTilesDataset(Dataset):
-    """Dataset for image/mask tiles and optional per-pixel weights."""
+    """Dataset for image/mask tiles and optional per-pixel weights.
+
+    Parameters
+    ----------
+    image_dir, mask_dir : path-like
+        Directories containing tile images and binary masks.
+    weight_dir : path-like or None
+        Directory with ``.npy`` weight maps.  When *None*, uniform weights
+        of 1.0 are used.
+    augment : bool
+        If *True*, apply the U-Net paper augmentations (elastic deformation,
+        random rotation, random flip) during ``__getitem__``.
+    mask_threshold : int
+        Pixel value above which a mask pixel is considered foreground.
+    """
 
     def __init__(
         self,
         image_dir: str | Path,
         mask_dir: str | Path,
         weight_dir: str | Path | None = None,
+        augment: bool = False,
         mask_threshold: int = 128,
     ) -> None:
         self.image_dir = Path(image_dir)
         self.mask_dir = Path(mask_dir)
         self.weight_dir = Path(weight_dir) if weight_dir is not None else None
         self.mask_threshold = mask_threshold
+        self.augment = augment
         self.samples = self._collect_samples()
-
         if not self.samples:
             raise ValueError(f"No samples found in {self.image_dir}")
 
@@ -84,7 +100,15 @@ class SegmentationTilesDataset(Dataset):
                     f"{weight_np.shape} vs {mask_np.shape}"
                 )
 
+        # U-Net paper augmentations (§2)
+        if self.augment:
+            image_np, mask_np, weight_np = apply_augmentations(
+                image_np, mask_np.astype(np.float32), weight_np,
+            )
+            mask_np = mask_np.astype(np.int64)
+
         image_tensor = torch.from_numpy(image_np).unsqueeze(0).float()
         mask_tensor = torch.from_numpy(mask_np).long()
         weight_tensor = torch.from_numpy(weight_np).float()
         return image_tensor, mask_tensor, weight_tensor
+

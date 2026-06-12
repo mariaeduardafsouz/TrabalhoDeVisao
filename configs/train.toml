@@ -1,5 +1,18 @@
+# ============================================================================
+# Original U-Net training configuration (v1 baseline)
+#
+# Faithful to the original paper (Ronneberger et al., 2015).
+# New fields are present with v1-compatible defaults so the same train.py
+# works for both v1 and v2 without changes.
+#
+# Usage:  python -m unet_bccd.train --config configs/train.toml
+# ============================================================================
+
 [data]
 data_root = "data/BCCD_processado"
+
+[model]
+model_version = "v1"
 
 [training]
 epochs = 50
@@ -11,16 +24,23 @@ early_stopping_patience = 7
 # device = "cuda"
 
 [optimizer]
+optimizer_type = "sgd"
 lr = 0.001
-momentum = 0.99
-# weight_decay and nesterov not used (not mentioned in the original paper)
+momentum = 0.99  # High value compensates noisy gradients at batch_size=1; lower to 0.9-0.95 if using batch_size>1 with SGD
+# weight_decay not used in the original paper
 
-# [scheduler]
-# Disabled by default: the original U-Net paper uses a fixed learning rate.
-# Uncomment and set use_scheduler = true to re-enable StepLR decay.
-# use_scheduler = true
+[scheduler]
+# Disabled: the original U-Net paper uses a fixed learning rate.
+# scheduler_type = "step"
 # step_size = 10
 # gamma = 0.5
+
+[loss]
+loss_type = "ce"
+
+[augmentation]
+# Original paper augmentations only
+augment_strategies = ["elastic", "rotate90", "flip"]
 
 [output]
 output_dir = "runs/unet"

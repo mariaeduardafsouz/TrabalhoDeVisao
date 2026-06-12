@@ -7,7 +7,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from .transforms import apply_augmentations
+from .transforms import AugmentationParams, apply_augmentations
 from .utils import find_file_by_stem, list_image_files
 
 
@@ -22,10 +22,14 @@ class SegmentationTilesDataset(Dataset):
         Directory with ``.npy`` weight maps.  When *None*, uniform weights
         of 1.0 are used.
     augment : bool
-        If *True*, apply the U-Net paper augmentations (elastic deformation,
-        random rotation, random flip) during ``__getitem__``.
+        If *True*, apply augmentations during ``__getitem__``.
     mask_threshold : int
         Pixel value above which a mask pixel is considered foreground.
+    augment_strategies : list[str] or None
+        Which augmentation strategies to apply.  ``None`` uses the
+        original paper defaults (elastic, rotate90, flip).
+    augment_params : AugmentationParams or None
+        Tuneable parameters for the augmentation strategies.
     """
 
     def __init__(
@@ -35,12 +39,16 @@ class SegmentationTilesDataset(Dataset):
         weight_dir: str | Path | None = None,
         augment: bool = False,
         mask_threshold: int = 128,
+        augment_strategies: list[str] | None = None,
+        augment_params: AugmentationParams | None = None,
     ) -> None:
         self.image_dir = Path(image_dir)
         self.mask_dir = Path(mask_dir)
         self.weight_dir = Path(weight_dir) if weight_dir is not None else None
         self.mask_threshold = mask_threshold
         self.augment = augment
+        self.augment_strategies = augment_strategies
+        self.augment_params = augment_params
         self.samples = self._collect_samples()
         if not self.samples:
             raise ValueError(f"No samples found in {self.image_dir}")
@@ -100,10 +108,12 @@ class SegmentationTilesDataset(Dataset):
                     f"{weight_np.shape} vs {mask_np.shape}"
                 )
 
-        # U-Net paper augmentations (§2)
+        # Augmentations (configurable strategies)
         if self.augment:
             image_np, mask_np, weight_np = apply_augmentations(
                 image_np, mask_np.astype(np.float32), weight_np,
+                strategies=self.augment_strategies,
+                params=self.augment_params,
             )
             mask_np = mask_np.astype(np.int64)
 

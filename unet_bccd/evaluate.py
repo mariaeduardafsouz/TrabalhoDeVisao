@@ -24,6 +24,18 @@ class EvalConfig:
     num_workers: int = 0
     device: str | None = None
     num_visualizations: int = 2
+    model_version: str = "v1"
+    use_padding: bool = True
+
+
+def _build_model(config: EvalConfig) -> torch.nn.Module:
+    """Instantiate the correct model variant."""
+    if config.model_version == "v2":
+        from .model_v2 import UNetV2
+
+        padding = 1 if config.use_padding else 0
+        return UNetV2(in_channels=1, out_channels=2, padding=padding)
+    return UNet(in_channels=1, out_channels=2)
 
 
 @torch.no_grad()
@@ -43,7 +55,7 @@ def run_evaluation(config: EvalConfig) -> dict[str, float]:
         pin_memory=True,
     )
 
-    model = UNet(in_channels=1, out_channels=2).to(device)
+    model = _build_model(config).to(device)
     state_dict = torch.load(config.model_path, map_location=device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -57,8 +69,18 @@ def run_evaluation(config: EvalConfig) -> dict[str, float]:
 
         logits = model(images)
         predictions = torch.argmax(logits, dim=1)
-        target_crop = center_crop_last_dims(masks, logits.shape[-2], logits.shape[-1])
-        image_crop = center_crop_last_dims(images, logits.shape[-2], logits.shape[-1])
+
+        # Auto-crop only when output is smaller than input (valid convolutions)
+        if masks.shape[-2:] != logits.shape[-2:]:
+            target_crop = center_crop_last_dims(
+                masks, logits.shape[-2], logits.shape[-1],
+            )
+            image_crop = center_crop_last_dims(
+                images, logits.shape[-2], logits.shape[-1],
+            )
+        else:
+            target_crop = masks
+            image_crop = images
 
         for image, prediction, target in zip(image_crop, predictions, target_crop):
             totals.update(binary_segmentation_metrics(prediction, target))
@@ -100,8 +122,18 @@ def parse_args() -> EvalConfig:
         type=int,
         default=EvalConfig.num_visualizations,
     )
+    parser.add_argument(
+        "--model-version", default=EvalConfig.model_version,
+        choices=["v1", "v2"],
+    )
+    parser.add_argument("--use-padding", action="store_true", default=None)
+    parser.add_argument("--no-padding", dest="use_padding", action="store_false")
     args = parser.parse_args()
-    return EvalConfig(**vars(args))
+    args_dict = vars(args)
+    # Handle None for use_padding (keep default)
+    if args_dict["use_padding"] is None:
+        args_dict["use_padding"] = EvalConfig.use_padding
+    return EvalConfig(**args_dict)
 
 
 def main() -> None:

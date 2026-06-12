@@ -323,6 +323,18 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
 
     # ---- Build model, optimizer, scheduler, loss ----
     model = build_model(config).to(device)
+
+    # Warn about suboptimal BatchNorm + small batch combination
+    if config.model_version == "v2" and config.batch_size < 2:
+        import warnings
+        warnings.warn(
+            f"model_version='v2' uses BatchNorm which computes per-batch "
+            f"statistics. With batch_size={config.batch_size} these "
+            f"statistics will be noisy and may hurt training. "
+            f"Consider using batch_size >= 2 (ideally >= 4).",
+            UserWarning,
+            stacklevel=1,
+        )
     optimizer = build_optimizer(model, config)
     scheduler, scheduler_mode = build_scheduler(
         optimizer, config, steps_per_epoch=len(train_loader),

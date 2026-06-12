@@ -79,6 +79,15 @@ Voce tambem pode sobrescrever qualquer valor do arquivo pelo terminal:
 python -m unet_bccd.train --config configs/train.toml --epochs 1 --batch-size 2 --lr 0.0005 --output-dir runs/debug
 ```
 
+O treinamento suporta **early stopping**: se a `val_loss` nao melhorar por
+`early_stopping_patience` epocas consecutivas, o treino para automaticamente.
+O melhor modelo fica salvo em `runs/unet/unet_best.pth`. Para desativar,
+use `--early-stopping-patience 0`.
+
+```powershell
+python -m unet_bccd.train --config configs/train.toml --early-stopping-patience 10
+```
+
 ## Avaliar
 
 ```powershell

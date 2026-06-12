@@ -39,6 +39,7 @@ class TrainConfig:
     use_scheduler: bool = False
     augment: bool = True
     augmentation_strategies: list[str] = field(default_factory=lambda: ["paper"])
+    early_stopping_patience: int = 0
     checkpoint_every: int = 5
     output_dir: Path = Path("runs/unet")
     final_model_name: str = "unet_final.pth"
@@ -48,7 +49,7 @@ class TrainConfig:
 
 CONFIG_SECTIONS = {
     "data": {"data_root"},
-    "training": {"epochs", "batch_size", "num_workers", "seed", "device", "augment"},
+    "training": {"epochs", "batch_size", "num_workers", "seed", "device", "augment", "early_stopping_patience"},
     "augmentation": {"strategies"},
     "optimizer": {"lr", "momentum", "weight_decay"},
     "scheduler": {"step_size", "gamma", "use_scheduler"},
@@ -115,6 +116,7 @@ def train_one_epoch(
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         total_loss += loss.item()
@@ -174,6 +176,10 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
             gamma=config.gamma,
         )
 
+    use_early_stopping = config.early_stopping_patience > 0 and val_loader is not None
+    best_val_loss = float("inf")
+    epochs_without_improvement = 0
+
     print(f"Device: {device}")
     print(f"Train samples: {len(train_loader.dataset)}")
     if val_loader is not None:
@@ -181,6 +187,10 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
     print(f"Augment: {config.augment}")
     print(f"Augmentation strategies: {', '.join(strategies) if strategies else 'none'}")
     print(f"Parameters: {count_parameters(model):,}")
+    if use_early_stopping:
+        print(f"Early stopping: patience={config.early_stopping_patience} epochs")
+    elif config.early_stopping_patience > 0:
+        print("Early stopping: disabled (no validation set)")
 
     history: dict[str, list[float]] = {
         "train_loss": [],
@@ -220,6 +230,29 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
                 f" - val_dice={val_metrics['dice']:.4f}"
             )
         print(message)
+
+        # Early stopping check
+        if use_early_stopping:
+            current_val_loss = val_metrics["loss"]
+            if current_val_loss < best_val_loss:
+                best_val_loss = current_val_loss
+                epochs_without_improvement = 0
+                # Save best model
+                best_model_path = output_dir / "unet_best.pth"
+                torch.save(model.state_dict(), best_model_path)
+                print(f"Best model saved (val_loss={best_val_loss:.4f})")
+            else:
+                epochs_without_improvement += 1
+                print(
+                    f"No improvement for {epochs_without_improvement}/"
+                    f"{config.early_stopping_patience} epochs"
+                )
+                if epochs_without_improvement >= config.early_stopping_patience:
+                    print(
+                        f"Early stopping at epoch {epoch} "
+                        f"(best val_loss={best_val_loss:.4f})"
+                    )
+                    break
 
         if config.checkpoint_every > 0 and epoch % config.checkpoint_every == 0:
             save_checkpoint(
@@ -347,6 +380,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--final-model-name", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--early-stopping-patience", type=int, default=None)
     args = parser.parse_args()
     args_dict = vars(args)
     config_path = args_dict.pop("config")

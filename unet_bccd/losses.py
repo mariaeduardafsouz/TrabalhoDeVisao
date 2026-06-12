@@ -17,5 +17,6 @@ def weighted_cross_entropy(
     weights_crop = center_crop_last_dims(weights, target_h, target_w)
 
     pixel_loss = F.cross_entropy(logits, target_crop, reduction="none")
+    weights_crop = torch.clamp(weights_crop, max=50.0)
     loss = (pixel_loss * weights_crop).mean()
     return loss, target_crop

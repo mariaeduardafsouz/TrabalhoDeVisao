@@ -1,0 +1,29 @@
+[data]
+data_root = "data/BCCD_processado"
+
+[training]
+epochs = 50
+batch_size = 1
+num_workers = 0
+seed = 42
+augment = true
+# device = "cuda"
+
+[augmentation]
+# Edit this list to choose any two strategies you want to compare.
+strategies = ["paper", "local_rotation"]
+
+[optimizer]
+lr = 0.01
+momentum = 0.99
+weight_decay = 0.0
+
+[scheduler]
+use_scheduler = false
+step_size = 10
+gamma = 0.5
+
+[output]
+output_dir = "runs/unet_two_strategies"
+checkpoint_every = 5
+final_model_name = "unet_final.pth"

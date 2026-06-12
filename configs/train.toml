@@ -9,6 +9,9 @@ seed = 42
 augment = true
 # device = "cuda"
 
+[augmentation]
+strategies = ["paper"]
+
 [optimizer]
 lr = 0.01
 momentum = 0.99

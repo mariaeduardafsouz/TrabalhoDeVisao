@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from dataclasses import fields
 from pathlib import Path
 
@@ -20,6 +20,7 @@ from .dataset import SegmentationTilesDataset
 from .losses import weighted_cross_entropy
 from .metrics import MetricTotals, binary_segmentation_metrics
 from .model import UNet, count_parameters
+from .transforms import AVAILABLE_AUGMENTATION_STRATEGIES, normalize_strategies
 from .utils import ensure_dir, get_device, set_seed
 from .visualization import plot_history
 
@@ -37,6 +38,7 @@ class TrainConfig:
     gamma: float = 0.5
     use_scheduler: bool = False
     augment: bool = True
+    augmentation_strategies: list[str] = field(default_factory=lambda: ["paper"])
     checkpoint_every: int = 5
     output_dir: Path = Path("runs/unet")
     final_model_name: str = "unet_final.pth"
@@ -47,6 +49,7 @@ class TrainConfig:
 CONFIG_SECTIONS = {
     "data": {"data_root"},
     "training": {"epochs", "batch_size", "num_workers", "seed", "device", "augment"},
+    "augmentation": {"strategies"},
     "optimizer": {"lr", "momentum", "weight_decay"},
     "scheduler": {"step_size", "gamma", "use_scheduler"},
     "output": {"output_dir", "checkpoint_every", "final_model_name"},
@@ -54,11 +57,13 @@ CONFIG_SECTIONS = {
 
 
 def build_dataloaders(config: TrainConfig) -> tuple[DataLoader, DataLoader | None]:
+    strategies = normalize_strategies(config.augmentation_strategies)
     train_dataset = SegmentationTilesDataset(
         config.data_root / "train" / "original_tiles",
         config.data_root / "train" / "mask_tiles",
         config.data_root / "train" / "pesos",
         augment=config.augment,
+        augmentation_strategies=strategies,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -151,6 +156,7 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
     device = get_device(config.device)
     output_dir = ensure_dir(config.output_dir)
     checkpoint_dir = ensure_dir(output_dir / "checkpoints")
+    strategies = normalize_strategies(config.augmentation_strategies)
 
     train_loader, val_loader = build_dataloaders(config)
     model = UNet(in_channels=1, out_channels=2).to(device)
@@ -172,6 +178,8 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
     print(f"Train samples: {len(train_loader.dataset)}")
     if val_loader is not None:
         print(f"Val samples: {len(val_loader.dataset)}")
+    print(f"Augment: {config.augment}")
+    print(f"Augmentation strategies: {', '.join(strategies) if strategies else 'none'}")
     print(f"Parameters: {count_parameters(model):,}")
 
     history: dict[str, list[float]] = {
@@ -284,7 +292,10 @@ def load_train_config(config_path: Path) -> dict:
                 raise ValueError(
                     f"Unknown keys in [{key}]: {', '.join(sorted(unknown))}"
                 )
-            values.update(value)
+            if key == "augmentation":
+                values["augmentation_strategies"] = value.get("strategies", [])
+            else:
+                values.update(value)
             continue
 
         if key not in valid_fields:
@@ -302,6 +313,11 @@ def build_train_config(config_path: Path | None, overrides: dict) -> TrainConfig
     values.update({key: value for key, value in overrides.items() if value is not None})
     values["data_root"] = Path(values["data_root"])
     values["output_dir"] = Path(values["output_dir"])
+    values["augmentation_strategies"] = list(
+        normalize_strategies(values.get("augmentation_strategies"))
+    )
+    if not values["augmentation_strategies"]:
+        values["augment"] = False
     return TrainConfig(**values)
 
 
@@ -320,6 +336,12 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--use-scheduler", action="store_true", default=None)
     parser.add_argument("--augment", action="store_true", default=None)
     parser.add_argument("--no-augment", dest="augment", action="store_false")
+    parser.add_argument(
+        "--augmentation-strategies",
+        nargs="*",
+        default=None,
+        choices=AVAILABLE_AUGMENTATION_STRATEGIES,
+    )
     parser.add_argument("--checkpoint-every", type=int, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--final-model-name", default=None)

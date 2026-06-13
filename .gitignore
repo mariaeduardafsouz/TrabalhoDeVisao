@@ -15,3 +15,7 @@ training_history.png
 
 venv/
 models/
+
+log_modelo_A.txt
+nohup.out
+log_model_v2.out

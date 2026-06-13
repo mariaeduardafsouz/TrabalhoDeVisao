@@ -34,6 +34,7 @@ class TrainConfig:
     lr: float = 0.01
     momentum: float = 0.99
     weight_decay: float = 0.0
+    class_weights: list[float] | None = None
     step_size: int = 10
     gamma: float = 0.5
     use_scheduler: bool = False
@@ -43,15 +44,17 @@ class TrainConfig:
     checkpoint_every: int = 5
     output_dir: Path = Path("runs/unet")
     final_model_name: str = "unet_final.pth"
+    resume_checkpoint: Path | None = None
     seed: int = 42
     device: str | None = None
 
 
 CONFIG_SECTIONS = {
     "data": {"data_root"},
-    "training": {"epochs", "batch_size", "num_workers", "seed", "device", "augment", "early_stopping_patience"},
+    "training": {"epochs", "batch_size", "num_workers", "seed", "device", "augment", "early_stopping_patience", "resume_checkpoint"},
     "augmentation": {"strategies"},
     "optimizer": {"lr", "momentum", "weight_decay"},
+    "loss": {"class_weights"},
     "scheduler": {"step_size", "gamma", "use_scheduler"},
     "output": {"output_dir", "checkpoint_every", "final_model_name"},
 }
@@ -101,6 +104,7 @@ def train_one_epoch(
     device: torch.device,
     epoch: int,
     epochs: int,
+    class_weights: torch.Tensor | None = None,
 ) -> float:
     model.train()
     total_loss = 0.0
@@ -112,7 +116,12 @@ def train_one_epoch(
         weights = weights.to(device)
 
         logits = model(images)
-        loss, _ = weighted_cross_entropy(logits, masks, weights)
+        loss, _ = weighted_cross_entropy(
+            logits,
+            masks,
+            weights,
+            class_weights=class_weights,
+        )
 
         optimizer.zero_grad()
         loss.backward()
@@ -130,10 +139,14 @@ def validate(
     model: UNet,
     loader: DataLoader,
     device: torch.device,
+    class_weights: torch.Tensor | None = None,
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
     totals = MetricTotals()
+    pred_cell_pixels = 0
+    target_cell_pixels = 0
+    total_pixels = 0
 
     for images, masks, weights in loader:
         images = images.to(device)
@@ -141,15 +154,25 @@ def validate(
         weights = weights.to(device)
 
         logits = model(images)
-        loss, target_crop = weighted_cross_entropy(logits, masks, weights)
+        loss, target_crop = weighted_cross_entropy(
+            logits,
+            masks,
+            weights,
+            class_weights=class_weights,
+        )
         predictions = torch.argmax(logits, dim=1)
         total_loss += loss.item()
+        pred_cell_pixels += int((predictions == 1).sum().item())
+        target_cell_pixels += int((target_crop == 1).sum().item())
+        total_pixels += int(predictions.numel())
 
         for prediction, target in zip(predictions, target_crop):
             totals.update(binary_segmentation_metrics(prediction, target))
 
     averages = totals.averages()
     averages["loss"] = total_loss / max(len(loader), 1)
+    averages["pred_cell_ratio"] = pred_cell_pixels / max(total_pixels, 1)
+    averages["target_cell_ratio"] = target_cell_pixels / max(total_pixels, 1)
     return averages
 
 
@@ -168,6 +191,7 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
         momentum=config.momentum,
         weight_decay=config.weight_decay,
     )
+    class_weight_tensor = build_class_weight_tensor(config.class_weights, device)
     scheduler = None
     if config.use_scheduler:
         scheduler = optim.lr_scheduler.StepLR(
@@ -179,18 +203,7 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
     use_early_stopping = config.early_stopping_patience > 0 and val_loader is not None
     best_val_loss = float("inf")
     epochs_without_improvement = 0
-
-    print(f"Device: {device}")
-    print(f"Train samples: {len(train_loader.dataset)}")
-    if val_loader is not None:
-        print(f"Val samples: {len(val_loader.dataset)}")
-    print(f"Augment: {config.augment}")
-    print(f"Augmentation strategies: {', '.join(strategies) if strategies else 'none'}")
-    print(f"Parameters: {count_parameters(model):,}")
-    if use_early_stopping:
-        print(f"Early stopping: patience={config.early_stopping_patience} epochs")
-    elif config.early_stopping_patience > 0:
-        print("Early stopping: disabled (no validation set)")
+    start_epoch = 1
 
     history: dict[str, list[float]] = {
         "train_loss": [],
@@ -199,9 +212,45 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
         "val_iou": [],
         "val_dice": [],
         "val_accuracy": [],
+        "val_pred_cell_ratio": [],
+        "val_target_cell_ratio": [],
     }
 
-    for epoch in range(1, config.epochs + 1):
+    if config.resume_checkpoint is not None:
+        checkpoint = load_checkpoint(
+            config.resume_checkpoint,
+            model,
+            optimizer,
+            scheduler,
+            device,
+        )
+        resumed_epoch = int(checkpoint["epoch"])
+        start_epoch = resumed_epoch + 1
+        history = load_history_from_checkpoint(checkpoint, history)
+        history = load_existing_history(output_dir, history)
+        history = trim_history(history, resumed_epoch)
+        if history["val_loss"]:
+            best_val_loss = min(history["val_loss"])
+            epochs_without_improvement = epochs_since_best(history["val_loss"])
+
+    print(f"Device: {device}")
+    print(f"Train samples: {len(train_loader.dataset)}")
+    if val_loader is not None:
+        print(f"Val samples: {len(val_loader.dataset)}")
+    print(f"Augment: {config.augment}")
+    print(f"Augmentation strategies: {', '.join(strategies) if strategies else 'none'}")
+    if class_weight_tensor is not None:
+        print(f"Class weights: {config.class_weights}")
+    print(f"Parameters: {count_parameters(model):,}")
+    if use_early_stopping:
+        print(f"Early stopping: patience={config.early_stopping_patience} epochs")
+    elif config.early_stopping_patience > 0:
+        print("Early stopping: disabled (no validation set)")
+    if config.resume_checkpoint is not None:
+        print(f"Resumed from checkpoint: {config.resume_checkpoint}")
+        print(f"Starting at epoch: {start_epoch}/{config.epochs}")
+
+    for epoch in range(start_epoch, config.epochs + 1):
         train_loss = train_one_epoch(
             model,
             train_loader,
@@ -209,6 +258,7 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
             device,
             epoch,
             config.epochs,
+            class_weights=class_weight_tensor,
         )
         if scheduler is not None:
             scheduler.step()
@@ -219,17 +269,27 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
 
         message = f"Epoch {epoch} - train_loss={train_loss:.4f} - lr={current_lr:.6f}"
         if val_loader is not None:
-            val_metrics = validate(model, val_loader, device)
+            val_metrics = validate(
+                model,
+                val_loader,
+                device,
+                class_weights=class_weight_tensor,
+            )
             history["val_loss"].append(val_metrics["loss"])
             history["val_iou"].append(val_metrics["iou"])
             history["val_dice"].append(val_metrics["dice"])
             history["val_accuracy"].append(val_metrics["accuracy"])
+            history["val_pred_cell_ratio"].append(val_metrics["pred_cell_ratio"])
+            history["val_target_cell_ratio"].append(val_metrics["target_cell_ratio"])
             message += (
                 f" - val_loss={val_metrics['loss']:.4f}"
                 f" - val_iou={val_metrics['iou']:.4f}"
                 f" - val_dice={val_metrics['dice']:.4f}"
+                f" - val_pred_cell={val_metrics['pred_cell_ratio']:.4f}"
+                f" - val_target_cell={val_metrics['target_cell_ratio']:.4f}"
             )
         print(message)
+        write_history(history, output_dir / "history.json")
 
         # Early stopping check
         if use_early_stopping:
@@ -259,16 +319,18 @@ def run_training(config: TrainConfig) -> dict[str, list[float]]:
                 checkpoint_dir / f"unet_epoch_{epoch}.pth",
                 model,
                 optimizer,
+                scheduler,
                 epoch,
                 train_loss,
                 config,
+                history,
             )
 
     final_model_path = output_dir / config.final_model_name
     torch.save(model.state_dict(), final_model_path)
 
     history_path = output_dir / "history.json"
-    history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    write_history(history, history_path)
     (output_dir / "config.json").write_text(
         json.dumps(_json_ready(asdict(config)), indent=2),
         encoding="utf-8",
@@ -283,21 +345,120 @@ def save_checkpoint(
     path: Path,
     model: UNet,
     optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler | None,
     epoch: int,
     loss: float,
     config: TrainConfig,
+    history: dict[str, list[float]],
 ) -> None:
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "config": _json_ready(asdict(config)),
+        "history": history,
+    }
+    if scheduler is not None:
+        checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+
     torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "loss": loss,
-            "config": _json_ready(asdict(config)),
-        },
+        checkpoint,
         path,
     )
     print(f"Checkpoint saved to: {path}")
+
+
+def load_checkpoint(
+    path: Path,
+    model: UNet,
+    optimizer: optim.Optimizer,
+    scheduler: optim.lr_scheduler.LRScheduler | None,
+    device: torch.device,
+) -> dict:
+    checkpoint = torch.load(path, map_location=device)
+    if "model_state_dict" not in checkpoint or "optimizer_state_dict" not in checkpoint:
+        raise ValueError(
+            f"Checkpoint {path} must contain model_state_dict and optimizer_state_dict."
+        )
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scheduler is not None and "scheduler_state_dict" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    if "epoch" not in checkpoint:
+        raise ValueError(f"Checkpoint {path} must contain epoch.")
+    return checkpoint
+
+
+def load_history_from_checkpoint(
+    checkpoint: dict,
+    default_history: dict[str, list[float]],
+) -> dict[str, list[float]]:
+    loaded = checkpoint.get("history")
+    if not isinstance(loaded, dict):
+        return default_history
+
+    for key in default_history:
+        values = loaded.get(key, [])
+        default_history[key] = list(values) if isinstance(values, list) else []
+    return default_history
+
+
+def load_existing_history(
+    output_dir: Path,
+    default_history: dict[str, list[float]],
+) -> dict[str, list[float]]:
+    history_path = output_dir / "history.json"
+    if not history_path.exists():
+        return default_history
+
+    loaded = json.loads(history_path.read_text(encoding="utf-8"))
+    for key in default_history:
+        values = loaded.get(key, [])
+        default_history[key] = list(values) if isinstance(values, list) else []
+    return default_history
+
+
+def write_history(history: dict[str, list[float]], path: Path) -> None:
+    path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+
+
+def trim_history(
+    history: dict[str, list[float]],
+    max_epochs: int,
+) -> dict[str, list[float]]:
+    return {
+        key: values[:max_epochs] if isinstance(values, list) else []
+        for key, values in history.items()
+    }
+
+
+def epochs_since_best(values: list[float]) -> int:
+    if not values:
+        return 0
+    best_index = min(range(len(values)), key=values.__getitem__)
+    return len(values) - best_index - 1
+
+
+def validate_class_weights(class_weights: list[float] | None) -> list[float] | None:
+    if class_weights is None:
+        return None
+    if len(class_weights) != 2:
+        raise ValueError("class_weights must contain two values: [background, cell].")
+    validated = [float(value) for value in class_weights]
+    if any(value <= 0 for value in validated):
+        raise ValueError("class_weights values must be positive.")
+    return validated
+
+
+def build_class_weight_tensor(
+    class_weights: list[float] | None,
+    device: torch.device,
+) -> torch.Tensor | None:
+    class_weights = validate_class_weights(class_weights)
+    if class_weights is None:
+        return None
+    return torch.tensor(class_weights, dtype=torch.float32, device=device)
 
 
 def _json_ready(value):
@@ -346,6 +507,9 @@ def build_train_config(config_path: Path | None, overrides: dict) -> TrainConfig
     values.update({key: value for key, value in overrides.items() if value is not None})
     values["data_root"] = Path(values["data_root"])
     values["output_dir"] = Path(values["output_dir"])
+    if values["resume_checkpoint"] is not None:
+        values["resume_checkpoint"] = Path(values["resume_checkpoint"])
+    values["class_weights"] = validate_class_weights(values.get("class_weights"))
     values["augmentation_strategies"] = list(
         normalize_strategies(values.get("augmentation_strategies"))
     )
@@ -364,6 +528,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--momentum", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--class-weights", nargs=2, type=float, default=None)
     parser.add_argument("--step-size", type=int, default=None)
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--use-scheduler", action="store_true", default=None)
@@ -381,6 +546,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--early-stopping-patience", type=int, default=None)
+    parser.add_argument("--resume-checkpoint", type=Path, default=None)
     args = parser.parse_args()
     args_dict = vars(args)
     config_path = args_dict.pop("config")

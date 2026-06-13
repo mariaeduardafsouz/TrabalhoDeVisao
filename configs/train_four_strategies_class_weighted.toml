@@ -1,0 +1,33 @@
+[data]
+data_root = "data/BCCD_processado"
+
+[training]
+epochs = 50
+batch_size = 1
+num_workers = 0
+seed = 42
+augment = true
+early_stopping_patience = 7
+# device = "cuda"
+
+[augmentation]
+strategies = ["paper", "intensity", "acquisition_noise", "local_rotation"]
+
+[optimizer]
+lr = 0.001
+momentum = 0.99
+weight_decay = 0.0
+
+[loss]
+# [background, cell]. This counteracts collapse to predicting only background.
+class_weights = [1.0, 4.0]
+
+[scheduler]
+use_scheduler = false
+step_size = 10
+gamma = 0.5
+
+[output]
+output_dir = "runs/unet_four_strategies_class_weighted"
+checkpoint_every = 5
+final_model_name = "unet_final.pth"

@@ -63,10 +63,31 @@ Com as quatro estrategias de augmentation:
 python -m unet_bccd.train --config configs/train_four_strategies.toml
 ```
 
+Se o modelo colapsar para prever somente fundo, use a versao com peso de classe
+explicito na loss:
+
+```powershell
+python -m unet_bccd.train --config configs/train_four_strategies_class_weighted.toml
+```
+
+Tambem e possivel passar os pesos diretamente pela linha de comando. A ordem e
+`[fundo, celula]`:
+
+```powershell
+python -m unet_bccd.train --config configs/train_four_strategies.toml --class-weights 1.0 4.0 --output-dir runs/unet_four_strategies_class_weighted
+```
+
 Com somente duas estrategias, edite `configs/train_two_strategies_example.toml` ou rode:
 
 ```powershell
 python -m unet_bccd.train --config configs/train_paper_augmentation.toml --augmentation-strategies paper local_rotation --output-dir runs/paper_local_rotation
+```
+
+Para continuar um treino a partir de um checkpoint salvo, use `--resume-checkpoint`.
+Por exemplo, para continuar depois do checkpoint da epoca 15:
+
+```powershell
+python -m unet_bccd.train --config configs/train_four_strategies.toml --resume-checkpoint runs/unet_four_strategies_v2/checkpoints/unet_epoch_15.pth --output-dir runs/unet_four_strategies_v2
 ```
 
 Estrategias disponiveis:

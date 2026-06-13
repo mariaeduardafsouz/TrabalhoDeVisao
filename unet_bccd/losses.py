@@ -10,13 +10,19 @@ def weighted_cross_entropy(
     logits: torch.Tensor,
     target: torch.Tensor,
     weights: torch.Tensor,
+    class_weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute weighted CE after center-cropping target/weights to logits size."""
     target_h, target_w = logits.shape[-2:]
     target_crop = center_crop_last_dims(target, target_h, target_w)
     weights_crop = center_crop_last_dims(weights, target_h, target_w)
 
-    pixel_loss = F.cross_entropy(logits, target_crop, reduction="none")
+    pixel_loss = F.cross_entropy(
+        logits,
+        target_crop,
+        weight=class_weights,
+        reduction="none",
+    )
     weights_crop = torch.clamp(weights_crop, max=50.0)
     loss = (pixel_loss * weights_crop).mean()
     return loss, target_crop

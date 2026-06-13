@@ -1,6 +1,6 @@
 """Utilities for training a valid-convolution U-Net on BCCD masks."""
 
-__all__ = ["UNet", "compute_unet_weight_map"]
+__all__ = ["UNet", "UNetV2", "compute_unet_weight_map"]
 
 
 def __getattr__(name: str):
@@ -8,6 +8,10 @@ def __getattr__(name: str):
         from .model import UNet
 
         return UNet
+    if name == "UNetV2":
+        from .model_v2 import UNetV2
+
+        return UNetV2
     if name == "compute_unet_weight_map":
         from .weights import compute_unet_weight_map
 

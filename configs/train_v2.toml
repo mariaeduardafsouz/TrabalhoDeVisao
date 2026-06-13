@@ -1,0 +1,52 @@
+# ============================================================================
+# Improved U-Net v2 training configuration
+#
+# All improvements enabled: BatchNorm model, AdamW, OneCycleLR, Dice+CE loss,
+# full augmentation pipeline, early stopping by IoU.
+#
+# Usage:  python -m unet_bccd.train --config configs/train_v2.toml
+# ============================================================================
+
+[data]
+data_root = "data/BCCD_processado"
+
+[model]
+model_version = "v2"
+use_padding = true
+
+[training]
+epochs = 100
+batch_size = 4
+num_workers = 0
+seed = 42
+augment = true
+early_stopping_patience = 15
+early_stopping_metric = "iou"
+# device = "cuda"
+
+[optimizer]
+optimizer_type = "adamw"
+lr = 0.001
+weight_decay = 1e-4
+
+[scheduler]
+scheduler_type = "onecycle"
+
+[loss]
+loss_type = "combined"
+dice_weight = 0.5
+
+[augmentation]
+augment_strategies = ["elastic", "rotate90", "flip", "brightness_contrast", "gaussian_noise"]
+elastic_sigma = 10.0
+elastic_grid_size = 3
+brightness_range = 0.2
+contrast_range = 0.2
+brightness_contrast_prob = 0.5
+noise_sigma_max = 0.03
+noise_prob = 0.3
+
+[output]
+output_dir = "runs/unet_v2"
+checkpoint_every = 10
+final_model_name = "unet_v2_final.pth"
